@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scads"
+version = "0.1.0"
+description = "SCADS — supply-chain-aware counterfeit-medicine risk screening"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24,<3",
+    "pillow>=10,<12",
+]
+
+[project.optional-dependencies]
+aws = ["boto3>=1.34"]
+dev = ["pytest>=8", "segno>=1.6"]
+
+[tool.setuptools]
+package-dir = {"" = "packages/scads"}
+
+[tool.setuptools.packages.find]
+where = ["packages/scads"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["packages/scads"]
+addopts = "-q --strict-markers"
+markers = [
+    "aws: requires real AWS credentials and a deployed stack (deselected by default)",
+    "slow: image-pipeline tests that build fixtures",
+]
+filterwarnings = ["error::DeprecationWarning:scads.*"]

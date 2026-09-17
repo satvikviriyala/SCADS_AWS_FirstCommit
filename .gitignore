@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets and local config
+.env
+.env.local
+*.pem
+*.key
+aws-exports.js
+apps/web/config.local.js
+
+# Build/deploy artifacts
+.build/
+.aws-sam/
+infra/packaged.yaml
+dist-lambda/
+*.zip
+
+# Local state backend (offline dev only)
+.scads-local/
+
+# Generated demo/eval artifacts
+tests/fixtures/generated/
+eval-out/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
