@@ -14,7 +14,9 @@ dependencies = [
 
 [project.optional-dependencies]
 aws = ["boto3>=1.34"]
-dev = ["pytest>=8", "segno>=1.6"]
+dev = ["pytest>=8", "segno>=1.6", "pyyaml>=6"]
+# segno generates fixture QR codes; pyyaml validates the CloudFormation
+# template. Neither is a runtime dependency of the deployed Lambda.
 
 [tool.setuptools]
 package-dir = {"" = "packages/scads"}

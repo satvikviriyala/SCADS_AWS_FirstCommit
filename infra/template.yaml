@@ -1,0 +1,413 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  SCADS — supply-chain-aware counterfeit-medicine risk screening.
+  Serverless request path: API Gateway -> Lambda -> S3 / Textract / DynamoDB,
+  with a deterministic decision engine and optional Bedrock explanation.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name.
+
+  AllowedOrigins:
+    Type: String
+    Default: '*'
+    Description: >
+      Comma-separated browser origins allowed to call the API. Set this to the
+      Amplify URL once it is known; '*' is acceptable only for a public demo
+      API that holds no user data and requires no credentials.
+
+  AdminApiToken:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: >
+      Token for the demo-reset endpoint. Leave empty to disable that route
+      entirely, which is the safe default. Supply via a parameter at deploy
+      time, never in source.
+
+  BedrockEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Optional prose rewriting. The decision is deterministic either way; a
+      Bedrock outage cannot affect a verdict.
+
+  BedrockModelId:
+    Type: String
+    Default: 'anthropic.claude-3-5-haiku-20241022-v1:0'
+
+  ScanRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 365
+    Description: >
+      Days before uploaded scan images expire. Short by design: raw photos of
+      people's medicine should not live indefinitely because storage is cheap
+      (docs/SECURITY_PRIVACY.md section 9).
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: CloudWatch log retention, kept short to control cost.
+
+  ArtifactBucket:
+    Type: String
+    Description: >
+      S3 bucket holding the Lambda deployment zip. CloudFormation applies the
+      SAM transform server-side, so the code must already be in S3 — this is
+      what removes the need for the SAM CLI.
+
+  ArtifactKey:
+    Type: String
+    Description: S3 key of the Lambda deployment zip.
+
+Conditions:
+  HasAdminToken: !Not [!Equals [!Ref AdminApiToken, '']]
+  UseBedrock: !Equals [!Ref BedrockEnabled, 'true']
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.12
+    # x86_64 rather than arm64: the deployment package is built by downloading
+    # manylinux x86_64 wheels with pip, which needs no emulation and no Docker.
+    # Docker is unavailable in this project's build environment, so a container
+    # image is not an option — see MEMORY.md, "Environment reality".
+    Architectures: [x86_64]
+    MemorySize: 1536
+    # numpy image work is CPU-bound, and Lambda scales CPU with memory, so more
+    # memory is *cheaper* here: it finishes proportionally faster at roughly
+    # constant GB-seconds while cutting wall-clock latency.
+    Timeout: 30
+    Tracing: Active
+    Environment:
+      Variables:
+        SCADS_ENV: !Ref Environment
+        POWERTOOLS_LOG_LEVEL: INFO
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ------------------------------------------------------------- storage --
+  ScanBucket:
+    Type: AWS::S3::Bucket
+    # Retained so a stack delete cannot destroy evidence from an investigation.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'scads-scans-${Environment}-${AWS::AccountId}'
+      # Never public. Uploads arrive by presigned PUT; reads happen only from
+      # the Lambda role (docs/THREAT_MODEL.md).
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireScanUploads
+            Status: Enabled
+            Prefix: scans/
+            ExpirationInDays: !Ref ScanRetentionDays
+          - Id: AbortIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [PUT]
+            AllowedOrigins: !Split [',', !Ref AllowedOrigins]
+            AllowedHeaders: ['content-type']
+            ExposedHeaders: ['ETag']
+            MaxAge: 600
+
+  ReferenceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'scads-references-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Enrolled references define what "genuine" means. Versioning means a bad
+      # or malicious overwrite is recoverable rather than final.
+      VersioningConfiguration:
+        Status: Enabled
+
+  # ------------------------------------------------------------ registry --
+  RegistryTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub 'scads-registry-${Environment}'
+      # On-demand: demo traffic is bursty and unpredictable, and provisioned
+      # capacity would either throttle the demo or bill for idle hours.
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  ScanEventsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub 'scads-scan-events-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: scan_id
+          AttributeType: S
+        - AttributeName: serial_index_key
+          AttributeType: S
+        - AttributeName: event_time
+          AttributeType: S
+      KeySchema:
+        - AttributeName: scan_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        # The scan-history dimension depends entirely on this index: "has this
+        # serial been seen elsewhere" must be a bounded query, never a scan.
+        # Sorting by event_time lets the newest observations be read directly.
+        - IndexName: serial-time-index
+          KeySchema:
+            - AttributeName: serial_index_key
+              KeyType: HASH
+            - AttributeName: event_time
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+
+  ReferenceTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub 'scads-references-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: reference_profile_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: reference_profile_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  # ----------------------------------------------------------------- api --
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/scads-api-${Environment}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiFunctionLogGroup
+    Properties:
+      FunctionName: !Sub 'scads-api-${Environment}'
+      CodeUri:
+        Bucket: !Ref ArtifactBucket
+        Key: !Ref ArtifactKey
+      Handler: handler.lambda_handler
+      Description: SCADS scan orchestrator and API
+      Environment:
+        Variables:
+          STORE_BACKEND: s3
+          REPO_BACKEND: dynamodb
+          OCR_PROVIDER: textract
+          SCAN_BUCKET: !Ref ScanBucket
+          REFERENCE_BUCKET: !Ref ReferenceBucket
+          REGISTRY_TABLE: !Ref RegistryTable
+          SCAN_EVENTS_TABLE: !Ref ScanEventsTable
+          REFERENCE_TABLE: !Ref ReferenceTable
+          ALLOWED_ORIGINS: !Ref AllowedOrigins
+          ADMIN_API_TOKEN: !If [HasAdminToken, !Ref AdminApiToken, '']
+          BEDROCK_ENABLED: !Ref BedrockEnabled
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          UPLOAD_MAX_BYTES: '8388608'
+          UPLOAD_URL_TTL_SECONDS: '300'
+      Policies:
+        # Least privilege, written out rather than using a managed policy, so
+        # each grant is visible and justified (docs/AWS_DEPLOYMENT.md §4).
+        - Statement:
+            # Presign and read scan uploads. No delete: the lifecycle rule
+            # expires them, and the request path has no reason to remove
+            # evidence.
+            - Effect: Allow
+              Action: ['s3:PutObject', 's3:GetObject']
+              Resource: !Sub '${ScanBucket.Arn}/scans/*'
+            # References are read-only from the request path. Enrollment is an
+            # admin operation run with developer credentials.
+            - Effect: Allow
+              Action: ['s3:GetObject']
+              Resource: !Sub '${ReferenceBucket.Arn}/*'
+            - Effect: Allow
+              Action: ['dynamodb:GetItem', 'dynamodb:Query']
+              Resource:
+                - !GetAtt RegistryTable.Arn
+                - !GetAtt ReferenceTable.Arn
+            - Effect: Allow
+              Action:
+                - 'dynamodb:GetItem'
+                - 'dynamodb:PutItem'
+                - 'dynamodb:Query'
+                - 'dynamodb:Scan'
+                - 'dynamodb:DeleteItem'
+              Resource:
+                - !GetAtt ScanEventsTable.Arn
+                - !Sub '${ScanEventsTable.Arn}/index/*'
+            - Effect: Allow
+              Action: ['textract:DetectDocumentText']
+              Resource: '*'
+        - !If
+          - UseBedrock
+          - Statement:
+              - Effect: Allow
+                Action: ['bedrock:InvokeModel']
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}'
+          - !Ref 'AWS::NoValue'
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+        RootEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      # CORS is also handled in the application, which owns the allowlist. This
+      # layer answers preflights without invoking the function.
+      CorsConfiguration:
+        AllowOrigins: !Split [',', !Ref AllowedOrigins]
+        AllowHeaders: ['content-type', 'x-admin-token', 'x-correlation-id']
+        AllowMethods: ['GET', 'POST', 'PUT', 'OPTIONS']
+        MaxAge: 600
+      # A demo URL is public. Throttling bounds both abuse and the bill.
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 30
+        ThrottlingRateLimit: 15
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","method":"$context.httpMethod","path":"$context.path","status":"$context.status","latency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}'
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/scads-${Environment}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ------------------------------------------------------------- alarms --
+  ApiErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'scads-api-errors-${Environment}'
+      AlarmDescription: SCADS API function is returning errors.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 3
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ApiLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'scads-api-latency-${Environment}'
+      AlarmDescription: SCADS scan latency is above the interactive budget.
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunction
+      ExtendedStatistic: p95
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 12000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiUrl:
+    Description: Public base URL for the SCADS API.
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub 'scads-api-url-${Environment}'
+
+  ScanBucketName:
+    Description: Private bucket holding scan uploads.
+    Value: !Ref ScanBucket
+
+  ReferenceBucketName:
+    Description: Private bucket holding enrolled reference artwork.
+    Value: !Ref ReferenceBucket
+
+  RegistryTableName:
+    Value: !Ref RegistryTable
+
+  ScanEventsTableName:
+    Value: !Ref ScanEventsTable
+
+  ReferenceTableName:
+    Value: !Ref ReferenceTable
+
+  FunctionName:
+    Value: !Ref ApiFunction
+
+  Region:
+    Value: !Ref 'AWS::Region'

@@ -9,7 +9,7 @@ from ..adapters.factory import Adapters
 from ..config import Settings
 from ..contracts.enums import ActorType, LocationMode, ScanStatus
 from ..contracts.models import ScanLocation
-from ..contracts.records import ScanEvent
+from ..contracts.records import DEMO_TAG, ScanEvent
 from ..decision.explain import CHEMICAL_LIMITATION
 from ..history.locations import list_locations, resolve_coordinates
 from ..physical.image import ALLOWED_CONTENT_TYPES
@@ -282,8 +282,6 @@ def admin_reset(
     if not hmac.compare_digest(token, settings.admin_api_token):
         log_warning("admin.reset_rejected")
         raise http.unauthorized()
-
-    from ..demo.seed_data import DEMO_TAG
 
     demo_tag = http.optional_string(body, "demo_tag", max_length=64) or DEMO_TAG
     removed = adapters.events.delete_events_by_demo_tag(demo_tag)

@@ -25,7 +25,9 @@ from ..contracts.records import (
 )
 from ..identity.qr import build_demo_payload
 
-DEMO_TAG = "scads_demo_v1"
+# Re-exported from contracts.records, which is where the field lives.
+from ..contracts.records import DEMO_TAG  # noqa: F401
+
 REFERENCE_VERSION = "ref_v1"
 
 MANUFACTURER = ManufacturerRecord(

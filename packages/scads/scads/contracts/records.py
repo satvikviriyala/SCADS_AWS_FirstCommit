@@ -23,6 +23,14 @@ from .enums import (
 )
 
 
+# Well-known value of ScanEvent.demo_tag for records created by seeding.
+#
+# Lives here, beside the field it tags, rather than in scads.demo: the admin
+# reset endpoint needs it, and the request path must not depend on the demo
+# package — which is excluded from the Lambda deployment package.
+DEMO_TAG = "scads_demo_v1"
+
+
 def _clean(data: Dict[str, Any]) -> Dict[str, Any]:
     """Drop ``None`` values so DynamoDB items stay sparse."""
     return {k: v for k, v in data.items() if v is not None}
