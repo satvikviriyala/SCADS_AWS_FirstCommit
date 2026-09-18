@@ -190,20 +190,31 @@ class LocalRegistry(Registry, RegistryWriter):
             self._save("serials", data)
 
     def put_reference_profile(self, record: ReferenceProfile) -> None:
-        with _LOCK:
-            data = self._load("reference_profiles")
-            data[record.reference_profile_id] = record.to_item()
-            self._save("reference_profiles", data)
+        # Reference profiles are owned by LocalReferenceStore, mirroring the AWS
+        # split where they live in their own table. Delegating rather than
+        # writing here keeps one writer per entity.
+        LocalReferenceStore(self.root).put_reference_profile(record)
 
 
-class LocalReferenceStore(ReferenceStore):
+class LocalReferenceStore(ReferenceStore, RegistryWriter):
+    """Reference-profile metadata, read and written.
+
+    Implements the writer half too, so the offline and DynamoDB reference
+    stores are interchangeable. They were not: the AWS reference table accepted
+    ``put_reference_profile`` while the offline one did not, so the seed script
+    worked against a deployed stack and crashed offline.
+    """
+
     backend_name = "local"
 
     def __init__(self, root: str) -> None:
         self.root = root
 
+    def _file(self) -> str:
+        return os.path.join(self.root, "registry", "reference_profiles.json")
+
     def _load(self) -> Dict[str, Any]:
-        return _read_json(os.path.join(self.root, "registry", "reference_profiles.json"), {})
+        return _read_json(self._file(), {})
 
     def get_profile(self, reference_profile_id: str) -> Optional[ReferenceProfile]:
         item = self._load().get(reference_profile_id)
@@ -211,6 +222,26 @@ class LocalReferenceStore(ReferenceStore):
 
     def list_profiles(self) -> List[ReferenceProfile]:
         return [ReferenceProfile.from_item(i) for i in self._load().values()]
+
+    def put_reference_profile(self, record: ReferenceProfile) -> None:
+        with _LOCK:
+            data = self._load()
+            data[record.reference_profile_id] = record.to_item()
+            _write_json(self._file(), data)
+
+    # The registry entities live in LocalRegistry; these exist only to satisfy
+    # the RegistryWriter port and fail loudly if misrouted.
+    def put_manufacturer(self, record):  # pragma: no cover - wrong store
+        raise NotImplementedError("manufacturers belong to the registry store")
+
+    def put_sku(self, record):  # pragma: no cover - wrong store
+        raise NotImplementedError("SKUs belong to the registry store")
+
+    def put_batch(self, record):  # pragma: no cover - wrong store
+        raise NotImplementedError("batches belong to the registry store")
+
+    def put_serial(self, record):  # pragma: no cover - wrong store
+        raise NotImplementedError("serials belong to the registry store")
 
 
 class LocalScanEventStore(ScanEventStore):

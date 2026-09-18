@@ -1,0 +1,10 @@
+# Runtime dependencies for the SCADS API Lambda.
+#
+# Deliberately short. numpy and Pillow unzip to ~79 MB, well inside the Lambda
+# 250 MB limit, so the function deploys as a plain zip with no container image
+# and therefore no Docker in the build path. See MEMORY.md, "Environment
+# reality", for the measurements behind dropping OpenCV.
+#
+# boto3 is provided by the Lambda Python runtime and is not vendored.
+numpy==2.0.2
+pillow==11.3.0
