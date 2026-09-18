@@ -395,3 +395,61 @@ def test_presentation_score_is_always_in_range():
     ):
         result = decide(b)
         assert 0.0 <= result.presentation_score <= 1.0
+
+
+def test_averaging_structurally_cannot_let_one_dimension_decide():
+    """The README's central claim, asserted so it cannot quietly become false.
+
+    Under a weighted average, a dimension's maximum influence is its weight. A
+    history dimension weighted 0.25 can therefore move the result by at most a
+    quarter, however impossible the evidence — it can never, by itself, produce
+    a suspicious verdict. Multiplicative fusion has no such ceiling.
+    """
+    identity, physical = 0.96, 0.87
+
+    def scores(history):
+        return compare_with_average(
+            bundle(
+                identity=valid_identity(score=identity),
+                physical=matching_physical(score=physical, registration=0.93),
+                history=contradicted_history(score=history),
+            )
+        )
+
+    clean_geometric, clean_average = scores(1.0)
+    bad_geometric, bad_average = scores(0.01)
+
+    # Averaging: the whole range of history evidence is worth its weight.
+    average_swing = (clean_average - bad_average) / clean_average
+    assert average_swing == pytest.approx(0.25, abs=0.02)
+    # Flatly impossible history still leaves the average in the review band.
+    assert bad_average > DEFAULT_POLICY.review_threshold
+
+    # Geometric: the same evidence scales the result instead.
+    geometric_swing = (clean_geometric - bad_geometric) / clean_geometric
+    assert geometric_swing > 0.4
+    assert bad_geometric < DEFAULT_POLICY.review_threshold
+
+    # The demo's actual numbers, quoted in the README.
+    demo_geometric, demo_average = scores(0.10)
+    assert demo_average == pytest.approx(0.709, abs=0.005)
+    assert demo_geometric == pytest.approx(0.524, abs=0.005)
+
+
+def test_readme_dimension_influence_table_is_accurate():
+    """The exact table printed in the README."""
+    expected = {
+        1.00: (0.934, 0.932),
+        0.50: (0.809, 0.784),
+        0.10: (0.709, 0.524),
+        0.01: (0.687, 0.295),
+    }
+    for history, (average, geometric) in expected.items():
+        b = bundle(
+            identity=valid_identity(score=0.96),
+            physical=matching_physical(score=0.87, registration=0.93),
+            history=contradicted_history(score=history),
+        )
+        actual_geometric, actual_average = compare_with_average(b)
+        assert actual_average == pytest.approx(average, abs=0.002), history
+        assert actual_geometric == pytest.approx(geometric, abs=0.002), history
