@@ -1,0 +1,13 @@
+{
+  "name": "SCADS — Medicine pack screening",
+  "short_name": "SCADS",
+  "description": "Screen a medicine pack by comparing its claimed identity, its physical packaging and its scan history.",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

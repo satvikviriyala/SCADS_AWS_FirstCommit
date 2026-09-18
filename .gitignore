@@ -36,6 +36,7 @@ dist-lambda/
 
 # Generated demo/eval artifacts
 tests/fixtures/generated/
+apps/web/fixtures/
 eval-out/
 
 # OS / editor

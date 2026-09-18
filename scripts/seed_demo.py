@@ -225,7 +225,12 @@ def main() -> int:
     parser.add_argument("--no-fixtures", action="store_true", help="skip writing fixture images")
     parser.add_argument("--scenarios", action="store_true", help="print scenarios and exit")
     parser.add_argument("--local-root", default=".scads-local", help="offline state directory")
-    parser.add_argument("--fixture-dir", default="tests/fixtures/generated")
+    parser.add_argument(
+        "--fixture-dir",
+        default=os.path.join("apps", "web", "fixtures"),
+        help="where to write demo captures; inside the web bundle so the public "
+             "deployment can serve them",
+    )
     args = parser.parse_args()
 
     if args.scenarios:
@@ -257,7 +262,10 @@ def main() -> int:
     seed_clone_history(adapters, _dt.datetime.now(_dt.timezone.utc))
 
     if not args.no_fixtures:
-        seed_fixture_images(adapters, settings, args.fixture_dir)
+        fixture_dir = args.fixture_dir
+        if not os.path.isabs(fixture_dir):
+            fixture_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", fixture_dir)
+        seed_fixture_images(adapters, settings, os.path.normpath(fixture_dir))
 
     print("\nSeed complete.")
     print_scenarios()

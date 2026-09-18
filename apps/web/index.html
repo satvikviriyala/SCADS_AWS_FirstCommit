@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<meta name="description" content="SCADS screens a medicine pack by comparing its claimed identity, its physical packaging and its scan history, and reporting where they disagree.">
+<title>SCADS — Medicine pack screening</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header class="topbar">
+  <div class="topbar__brand">
+    <svg class="topbar__mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+      <rect x="2" y="2" width="28" height="28" rx="7" fill="none" stroke="currentColor" stroke-width="2.5"/>
+      <path d="M9 16.5l4.5 4.5L23 11.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <p class="topbar__title">SCADS</p>
+      <p class="topbar__subtitle">Supply-chain-aware drug screening</p>
+    </div>
+  </div>
+  <button id="about-open" class="btn btn--ghost btn--small" type="button" aria-haspopup="dialog">
+    How it works
+  </button>
+</header>
+
+<main id="main">
+
+  <!-- ===================== SCAN ===================== -->
+  <section id="view-scan" class="view" aria-labelledby="scan-heading">
+    <div class="hero">
+      <h1 id="scan-heading" class="hero__title">Does this pack add up?</h1>
+      <p class="hero__lede">
+        A QR code only tells you an identifier was issued &mdash; and an identifier can be
+        copied onto a thousand packs. SCADS checks three independent things and shows you
+        where they disagree.
+      </p>
+      <ul class="pillars" role="list">
+        <li class="pillar"><span class="pillar__num">1</span><span><strong>Identity</strong><br>Is this code real?</span></li>
+        <li class="pillar"><span class="pillar__num">2</span><span><strong>Physical pack</strong><br>Does the printing match?</span></li>
+        <li class="pillar"><span class="pillar__num">3</span><span><strong>Scan history</strong><br>Has it been seen elsewhere?</span></li>
+      </ul>
+    </div>
+
+    <div class="card card--action">
+      <h2 class="card__title">Scan a pack</h2>
+
+      <label for="file-input" class="capture">
+        <svg viewBox="0 0 24 24" class="capture__icon" aria-hidden="true" focusable="false">
+          <path d="M4 8.5A2.5 2.5 0 016.5 6h1.2a2 2 0 001.7-.95l.55-.9A2 2 0 0111.66 3h.68a2 2 0 011.71.96l.55.89A2 2 0 0016.3 6h1.2A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19h-11A2.5 2.5 0 014 16.5v-8z"
+                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+          <circle cx="12" cy="12.5" r="3.4" fill="none" stroke="currentColor" stroke-width="1.7"/>
+        </svg>
+        <span class="capture__label">Take a photo of the front of the pack</span>
+        <span class="capture__hint">or choose an existing photo</span>
+      </label>
+      <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" class="visually-hidden">
+
+      <div class="guidance">
+        <p class="guidance__title">For a result you can rely on</p>
+        <ul role="list">
+          <li>Fill the frame with the front of the pack</li>
+          <li>Even light, no flash glare on the printing</li>
+          <li>Lay the pack flat and hold still</li>
+        </ul>
+      </div>
+
+      <details class="disclosure">
+        <summary>Where is this scan happening?</summary>
+        <div class="disclosure__body">
+          <p>
+            SCADS uses a <strong>simulated location</strong> to demonstrate the scan-history
+            checks. Your real location is never requested or stored.
+          </p>
+          <label for="location-select" class="field__label">Simulated location</label>
+          <select id="location-select" class="field__select"></select>
+        </div>
+      </details>
+
+      <p class="privacy">
+        <svg viewBox="0 0 24 24" class="privacy__icon" aria-hidden="true" focusable="false">
+          <path d="M12 3l7 3v5.5c0 4.2-2.9 8-7 9.5-4.1-1.5-7-5.3-7-9.5V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+        </svg>
+        No account, no name, no real location. The photo is used for this check and then
+        expires.
+      </p>
+    </div>
+
+    <div class="card card--demo">
+      <h2 class="card__title">
+        Demo packs
+        <span class="tag tag--sim">simulated</span>
+      </h2>
+      <p class="card__lede">
+        No enrolled pack to hand? These are generated demo captures. Each one exercises a
+        different combination of evidence.
+      </p>
+      <div id="demo-list" class="demo-list"></div>
+      <p class="card__footnote">
+        Tampered demo packs are <em>synthetically</em> altered images. They measure how the
+        checks respond to a controlled change &mdash; they are not real counterfeit samples.
+      </p>
+    </div>
+  </section>
+
+  <!-- ===================== PROCESSING ===================== -->
+  <section id="view-processing" class="view" hidden aria-labelledby="processing-heading" aria-live="polite">
+    <div class="card">
+      <h2 id="processing-heading" class="card__title">Checking this pack</h2>
+      <ol id="stage-list" class="stages" role="list">
+        <li class="stage" data-stage="upload"><span class="stage__dot"></span><span class="stage__label">Sending the photo securely</span></li>
+        <li class="stage" data-stage="identity"><span class="stage__dot"></span><span class="stage__label">Reading the code and printed text</span></li>
+        <li class="stage" data-stage="physical"><span class="stage__dot"></span><span class="stage__label">Comparing the packaging</span></li>
+        <li class="stage" data-stage="history"><span class="stage__dot"></span><span class="stage__label">Checking where this serial has been</span></li>
+      </ol>
+      <div id="preview-wrap" class="preview" hidden>
+        <img id="preview" alt="The pack photo being checked" />
+      </div>
+      <button id="cancel-btn" class="btn btn--ghost" type="button">Cancel</button>
+    </div>
+  </section>
+
+  <!-- ===================== RESULT ===================== -->
+  <section id="view-result" class="view" hidden aria-labelledby="result-heading">
+    <div id="verdict" class="verdict">
+      <p class="verdict__eyebrow">Result</p>
+      <h2 id="result-heading" class="verdict__headline"></h2>
+      <p id="verdict-class" class="verdict__class"></p>
+      <p id="verdict-detail" class="verdict__detail"></p>
+    </div>
+
+    <div id="product-banner" class="banner" hidden role="alert"></div>
+
+    <h3 class="section-heading">The three checks</h3>
+    <p class="section-lede">
+      These are measured independently. A pack has to satisfy all three &mdash; one cannot
+      make up for another.
+    </p>
+    <div id="dimensions" class="dimensions"></div>
+
+    <div id="findings-card" class="card" hidden>
+      <h3 class="card__title">What we found</h3>
+      <ul id="findings" class="findings" role="list"></ul>
+    </div>
+
+    <div id="timeline-card" class="card" hidden>
+      <h3 class="card__title">Where this serial has been seen</h3>
+      <ol id="timeline" class="timeline" role="list"></ol>
+      <p class="card__footnote">Locations in this demo are simulated.</p>
+    </div>
+
+    <div class="card card--action">
+      <h3 class="card__title">What to do next</h3>
+      <p id="next-action" class="next-action"></p>
+      <div class="limitation">
+        <h4 class="limitation__title">What this scan cannot tell you</h4>
+        <p id="limitation"></p>
+      </div>
+      <div class="actions">
+        <button id="rescan-btn" class="btn btn--primary" type="button">Scan another pack</button>
+        <button id="evidence-open" class="btn btn--ghost" type="button" aria-haspopup="dialog">
+          See the evidence
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== ERROR ===================== -->
+  <section id="view-error" class="view" hidden aria-labelledby="error-heading" role="alert">
+    <div class="card">
+      <h2 id="error-heading" class="card__title">That did not go through</h2>
+      <p id="error-message" class="card__lede"></p>
+      <button id="error-retry" class="btn btn--primary" type="button">Try again</button>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>
+    SCADS reports observed risk from packaging, identity and scan history. It is not a
+    chemical test and not medical advice.
+  </p>
+  <p id="build-info" class="footer__build"></p>
+</footer>
+
+<!-- ===================== EVIDENCE DRAWER ===================== -->
+<div id="evidence-dialog" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="evidence-title">
+  <div class="sheet__backdrop" data-close></div>
+  <div class="sheet__panel">
+    <div class="sheet__head">
+      <h2 id="evidence-title" class="sheet__title">Evidence</h2>
+      <button class="btn btn--icon" type="button" data-close aria-label="Close">&times;</button>
+    </div>
+    <div id="evidence-body" class="sheet__body"></div>
+  </div>
+</div>
+
+<!-- ===================== ABOUT DRAWER ===================== -->
+<div id="about-dialog" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="about-title">
+  <div class="sheet__backdrop" data-close></div>
+  <div class="sheet__panel">
+    <div class="sheet__head">
+      <h2 id="about-title" class="sheet__title">How SCADS works</h2>
+      <button class="btn btn--icon" type="button" data-close aria-label="Close">&times;</button>
+    </div>
+    <div class="sheet__body">
+      <h3>The problem with checking a code</h3>
+      <p>
+        Serialisation puts a unique code on a pack, and a database can confirm the code was
+        issued. It cannot confirm the code is on the pack it was issued for. Copy one real
+        code onto a thousand counterfeit packs and every one of them passes.
+      </p>
+
+      <h3>What SCADS adds</h3>
+      <p>
+        Three independent kinds of evidence, fused so that contradictions survive instead of
+        averaging away:
+      </p>
+      <dl class="deflist">
+        <dt>Identity</dt>
+        <dd>The code and the printed text are read separately and both checked against the
+            registry. On a genuine pack they agree with each other.</dd>
+        <dt>Physical pack</dt>
+        <dd>The pack is located in the photo, rectified onto the enrolled reference artwork,
+            and compared region by region &mdash; wording, position, structure and print detail.</dd>
+        <dt>Scan history</dt>
+        <dd>Where else has this exact serial been seen, and when? A unit serial identifies one
+            physical pack, so the same serial in two distant places at once is a contradiction
+            no database lookup can surface.</dd>
+      </dl>
+
+      <h3>Why not just average the three?</h3>
+      <p>
+        Because averaging is how a copied code gets through. A flawless pack with a valid but
+        cloned serial scores near-perfect on two dimensions out of three, and a weighted mean
+        would call that low risk. SCADS combines them multiplicatively and applies hard caps,
+        so a single decisive contradiction sets the result regardless of how good the rest
+        looks.
+      </p>
+
+      <h3>A bad photo is not evidence</h3>
+      <p>
+        Blur, glare and darkness are measured before anything is compared. A photo too poor to
+        judge returns <strong>Not enough evidence</strong> with advice on retaking it &mdash;
+        never an accusation against the pack. Getting this wrong would mean telling people
+        their genuine medicine is fake because their kitchen is dim.
+      </p>
+
+      <h3>Built on AWS</h3>
+      <p class="arch">
+        Amplify Hosting &rarr; API Gateway &rarr; Lambda &rarr; S3 (private, presigned direct
+        upload) &middot; Textract (OCR) &middot; DynamoDB (registry + scan events) &rarr;
+        deterministic decision engine &rarr; result. Bedrock is optional and can only restyle
+        wording; it never decides anything.
+      </p>
+
+      <h3>Limits worth stating plainly</h3>
+      <ul role="list">
+        <li>A photograph cannot measure what is inside a pack. No active ingredient, no dose,
+            no contamination.</li>
+        <li>Genuine packaging refilled with the wrong contents will pass every check here.</li>
+        <li>A copied serial may go undetected until it is scanned somewhere else.</li>
+        <li>The demo thresholds were set on synthetic fixtures, not on adjudicated counterfeit
+            samples. They are not validated detection rates.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js" type="module"></script>
+</body>
+</html>
