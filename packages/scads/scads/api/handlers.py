@@ -129,6 +129,7 @@ def analyze(
         body, "actor_type", max_length=32,
         allowed=tuple(a.value for a in ActorType),
     )
+    demo_tag = http.optional_string(body, "demo_tag", max_length=64)
 
     existing = adapters.events.get_event(scan_id)
     if existing is None:
@@ -158,6 +159,7 @@ def analyze(
             http.optional_object(body, "consent").get("coarse_location", False)
         ),
         correlation_id=correlation_id,
+        demo_tag=demo_tag,
     )
 
     outcome = analyze_scan(request, adapters, settings, clock)

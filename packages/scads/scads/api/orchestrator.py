@@ -81,6 +81,12 @@ class AnalyzeRequest:
     actor_type: ActorType = ActorType.CONSUMER
     consent_coarse_location: bool = False
     correlation_id: Optional[str] = None
+    # Marks this scan as demonstration traffic so the admin reset can clear it.
+    # Set by the demo panel and the smoke test; absent on a real scan. It is a
+    # self-declared hint, not a privilege: deleting tagged events still requires
+    # the admin token, so a caller can at most make their own scans resettable
+    # by an operator who is already clearing demo data.
+    demo_tag: Optional[str] = None
 
 
 @dataclass
@@ -428,7 +434,7 @@ def _build_event(
         ocr_provider=ocr.provider,
         evidence=evidence,
         latency_ms=latency_ms,
-        demo_tag=existing.demo_tag if existing else None,
+        demo_tag=request.demo_tag or (existing.demo_tag if existing else None),
     )
 
 

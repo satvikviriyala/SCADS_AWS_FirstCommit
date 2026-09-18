@@ -172,6 +172,33 @@ def qr_payload_for_fixture(name: str) -> Optional[str]:
     )
 
 
+SMOKE_DEMO_TAG = "scads_smoke_v1"
+
+
+def reset_demo_history(base: str, token: Optional[str], insecure: bool) -> int:
+    """Clear scans this harness created, so each run starts from the same state.
+
+    Returns the number removed, or -1 when no admin token is available. Without
+    a token the test still runs; it just cannot guarantee a clean slate, and
+    says so.
+    """
+    if not token:
+        return -1
+    removed = 0
+    for tag in (SMOKE_DEMO_TAG,):
+        status, body = request(
+            "POST", base + "/v1/admin/demo/reset",
+            body=json.dumps({"demo_tag": tag}).encode(),
+            headers={"Content-Type": "application/json", "X-Admin-Token": token},
+            insecure=insecure,
+        )
+        if status == 200:
+            removed += int(body.get("events_removed", 0))
+        elif status in (401, 404):
+            return -1
+    return removed
+
+
 def run_scan(
     base: str, fixture: str, location: str, insecure: bool
 ) -> Tuple[Dict[str, Any], float]:
@@ -199,7 +226,14 @@ def run_scan(
     except urllib.error.HTTPError as exc:
         raise SmokeFailure("upload PUT failed: %s %s" % (exc.code, exc.read()[:200]))
 
-    body: Dict[str, Any] = {"location": {"mode": "DEMO", "label": location}}
+    body: Dict[str, Any] = {
+        "location": {"mode": "DEMO", "label": location},
+        # Tag this as demonstration traffic so a rehearsal can reset it. Without
+        # this, repeated runs accumulate prior observations of the same serial
+        # and the scan-history rules correctly — but unhelpfully — start
+        # reporting SERIAL_REUSE against the clean pack.
+        "demo_tag": SMOKE_DEMO_TAG,
+    }
     payload = qr_payload_for_fixture(fixture)
     if payload:
         body["qr_payload"] = payload
@@ -263,6 +297,12 @@ def main() -> int:
     parser.add_argument("--expect-aws", action="store_true", help="require real AWS backends")
     parser.add_argument("--repeat", type=int, default=1, help="rehearsal runs")
     parser.add_argument("--insecure", action="store_true", help="skip TLS verification")
+    parser.add_argument(
+        "--admin-token",
+        default=os.environ.get("ADMIN_API_TOKEN"),
+        help="clears this harness's prior scans before each run, so repeated "
+             "rehearsals are independent",
+    )
     args = parser.parse_args()
 
     base = args.base_url.rstrip("/")
@@ -281,6 +321,11 @@ def main() -> int:
     for run in range(1, args.repeat + 1):
         if args.repeat > 1:
             print("\nrun %d of %d" % (run, args.repeat))
+        removed = reset_demo_history(base, args.admin_token, args.insecure)
+        if removed < 0 and run == 1:
+            print("  (no admin token: prior scans are not cleared between runs)")
+        elif removed > 0:
+            print("  reset: cleared %d prior scan(s) from this harness" % removed)
         print()
         for scenario in SCENARIOS:
             try:

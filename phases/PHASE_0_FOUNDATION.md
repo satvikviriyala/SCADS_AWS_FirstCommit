@@ -15,20 +15,25 @@ Create a boring, testable base that can deploy.
 9. Add placeholder mobile page.
 10. Update `MEMORY.md`.
 
-## Suggested stack
-- web: React + TypeScript;
-- backend: Python 3.12 Lambda/FastAPI-style handler or Node orchestrator + Python CV function;
-- CV/decision: Python;
-- IaC: SAM.
+## Stack [as built]
+- web: plain HTML + CSS + ES modules, no build step (there is no Node toolchain
+  in this environment, and Amplify Hosting serves static assets directly);
+- backend: Python Lambda, single language across API, CV and decision;
+- CV/decision: Python with numpy + Pillow only;
+- IaC: SAM template, deployed through boto3 + CloudFormation.
 
-Prefer fewer language boundaries if team is faster in one language.
+One language boundary, not three.
 
-## Acceptance
-- `npm run build` succeeds;
-- backend unit test succeeds;
-- `/health` works locally;
-- IaC validates;
-- no secret in git;
+## Acceptance [met]
+- `python -m pytest tests/ -q` passes;
+- `/health` answers locally via `scripts/dev_server.py`, reporting which
+  backends are live;
+- the CloudFormation template parses and its security properties are asserted
+  by `tests/unit/test_infra.py` (there is no SAM CLI here, and `sam validate`
+  would not check those properties anyway);
+- the web client is checked statically by `tests/unit/test_web_client.py`,
+  since there is no JS runtime to execute it;
+- `python scripts/secret_scan.py` is clean;
 - README gives bootstrap commands.
 
 ## Do not

@@ -205,7 +205,13 @@ async function runScan(file, meta = {}) {
       qr_payload: qrPayload || undefined,
       location: location
         ? { mode: "DEMO", label: location.key }
-        : { mode: "NONE" }
+        : { mode: "NONE" },
+      /* Scans started from the demo panel identify themselves, so an operator
+         can reset the demo between runs. Without this, repeated demonstrations
+         accumulate prior observations of the same serial and the history rules
+         correctly start reporting reuse against the clean pack. A scan of a
+         real pack carries no tag. */
+      demo_tag: meta.demo ? "scads_demo_ui_v1" : undefined
     };
 
     setStage("physical", "active");

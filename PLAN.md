@@ -344,10 +344,20 @@ Every scan persists pipeline version, policy version, reference version, signal 
 2. local OCR library in CV worker;
 3. Textract only when QR/direct extraction fails.
 
-## If OpenCV Lambda packaging fails
-1. Lambda container image;
-2. App Runner FastAPI CV microservice;
-3. reduced pure-Python/simple image features for demo, only if still meaningful.
+## OpenCV packaging [RESOLVED — OpenCV was removed]
+
+Measured rather than assumed: opencv-python-headless + numpy unzips to 223 MB
+against a 250 MB Lambda limit, carrying two copies of OpenBLAS and the ffmpeg
+stack for three function calls. numpy + Pillow is 79 MB and deploys as a plain
+zip with no Docker in the build path.
+
+Registration now uses quadrilateral detection plus a four-point DLT homography,
+which suits a planar carton better than ORB in any case. QR decoding moved to
+the browser's `BarcodeDetector`, with Textract OCR of the printed serial as the
+fallback. See `docs/ARCHITECTURE.md` section 5.
+
+If a future feature genuinely needs heavier CV, go to App Runner rather than a
+Lambda container.
 
 ## If Bedrock access/region fails
 Remove it from the request-critical path. Use deterministic explanation templates.

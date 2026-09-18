@@ -488,3 +488,77 @@ def test_demo_reset_removes_only_seeded_events(scads):
     # The seeded fixture is gone; the real observation is untouched.
     assert scads.adapters.events.get_event("scn_seedprior0001") is None
     assert scads.adapters.events.get_event(real["scan_id"]) is not None
+
+
+# --- demo repeatability --------------------------------------------------
+
+
+def test_repeated_demo_runs_are_identical_after_a_reset(scads):
+    """``phases/PHASE_6_EVALUATION.md``: the demo must survive five rehearsals.
+
+    Found by actually rehearsing. Every scan writes an event, so repeated runs
+    accumulate genuine prior observations of the same serial — and once one is
+    older than the rescan grace window the history rules correctly report
+    SERIAL_REUSE against the *clean* pack. The rules were right; the demo simply
+    had no way to return to a known state.
+
+    Demo traffic now tags itself so the admin reset can clear it. A scan of a
+    real pack carries no tag and is never touched.
+    """
+    token = scads.settings.admin_api_token
+    tag = "scads_test_rehearsal"
+
+    def rehearse():
+        scads.call("POST", "/v1/admin/demo/reset", {"demo_tag": tag},
+                   headers={"X-Admin-Token": token})
+        results = []
+        for fixture in ("genuine_clean_a", "tamper_logo_shift"):
+            spec = get_fixture(fixture)
+            image, words, lines, _ = build_fixture(spec)
+            data = to_jpeg_bytes(image, 92)
+            scads.ocr.write_sidecar(data, ocr_payload(words, lines))
+
+            _, created = scads.call(
+                "POST", "/v1/uploads",
+                {"content_type": "image/jpeg", "content_length": len(data)},
+            )
+            scads.upload_bytes(created["upload"]["url"], data)
+
+            serial = seed_data.serial_by_id(spec.serial_id)
+            batch = seed_data.batch_by_id(serial.batch_id)
+            sku = seed_data.sku_by_id(serial.sku_id)
+            _, result = scads.call(
+                "POST", "/v1/scans/%s/analyze" % created["scan_id"],
+                {
+                    "qr_payload": seed_data.build_qr_payload(
+                        serial_code=serial.serial_code, batch_code=batch.batch_code,
+                        gtin=sku.gtin, expiry=batch.expiry_date, product=sku.product_name,
+                    ),
+                    "location": {"mode": "DEMO", "label": "BENGALURU_DEMO"},
+                    "demo_tag": tag,
+                },
+            )
+            results.append((result["decision"], tuple(result["reason_codes"])))
+        return results
+
+    runs = [rehearse() for _ in range(5)]
+    assert len({tuple(r) for r in runs}) == 1, "rehearsals diverged: %s" % runs
+    assert runs[0][0][0] == Decision.LOW_OBSERVED_RISK.value
+    assert "SERIAL_REUSE" not in runs[-1][0][1]
+
+
+def test_reset_leaves_untagged_scans_alone(scads):
+    """A real observation must survive a demo reset."""
+    real = scads.scan("genuine_clean_b")
+    status, body = scads.call(
+        "POST", "/v1/admin/demo/reset", {"demo_tag": "scads_test_rehearsal"},
+        headers={"X-Admin-Token": scads.settings.admin_api_token},
+    )
+    assert status == 200
+    assert scads.adapters.events.get_event(real["scan_id"]) is not None
+
+
+def test_an_untagged_scan_records_no_demo_tag(scads):
+    result = scads.scan("genuine_clean_a")
+    event = scads.adapters.events.get_event(result["scan_id"])
+    assert event.demo_tag is None

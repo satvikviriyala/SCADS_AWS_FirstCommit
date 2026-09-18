@@ -25,13 +25,13 @@ flowchart LR
     U -->|2 image upload| S3
     U -->|3 create scan| API
 
-    L1 --> QR[QR decoder]
+    U --> QR[QR decode\nbrowser BarcodeDetector]
     L1 --> TX[Amazon Textract]
-    L1 --> CV[CV worker\nOpenCV + scikit-image]
+    L1 --> CV[CV pipeline\nnumpy + Pillow, in-process]
     L1 --> DDB[(DynamoDB)]
 
     TX --> EXT[Metadata normalizer]
-    QR --> EXT
+    QR -->|qr_payload| L1
     EXT --> DDB
 
     CV --> REF[(S3 Reference Images)]
@@ -209,30 +209,50 @@ Do not add Step Functions solely for architecture theatre.
 
 ## 5. CV compute placement
 
-### Option A — Lambda container [preferred if stable]
-Pros:
-- scales to zero;
-- strong Ship It fit;
-- simple architecture.
+**Decided: a plain Lambda zip, numpy + Pillow only.** No container image, no App
+Runner, no OpenCV.
 
-Cons:
-- cold start;
-- image packages.
+The original plan preferred a Lambda container image because OpenCV was assumed
+necessary. Measuring the actual packages changed the decision:
 
-### Option B — App Runner microservice
-Use if OpenCV Lambda packaging/latency becomes a blocker.
+| Dependency set | Unzipped | Fits a Lambda zip? |
+|---|---|---|
+| numpy + opencv-python-headless + Pillow | 223 MB | 27 MB under a 250 MB hard limit |
+| numpy + Pillow | 79 MB | comfortably |
 
-Pros:
-- standard FastAPI/container model;
-- straightforward native dependencies.
+The OpenCV build carries two separate copies of OpenBLAS (~71 MB together) and
+the full ffmpeg stack, for code that only needed `imdecode`, ORB and
+`warpPerspective`. Meanwhile the documented container fallback could not be
+built or validated at all, because the development environment has no Docker.
 
-Cons:
-- more moving parts/cost.
+What replaced OpenCV:
 
-### Decision rule
-Do not spend >1 focused debugging block fighting binary packaging. Move to App Runner if it protects delivery.
+| Needed | Now |
+|---|---|
+| decode JPEG/PNG | Pillow |
+| Gaussian blur | separable float convolution in numpy |
+| SSIM | implemented directly (~15 lines over a Gaussian) |
+| ORB + RANSAC homography | quadrilateral detection + four-point DLT homography |
+| `QRCodeDetector` | browser `BarcodeDetector`, with Textract OCR of the printed serial as fallback |
 
----
+The registration change is an improvement rather than a compromise. A medicine
+carton is a planar rectangle, which is far stronger prior information than
+generic keypoints exploit: locating its four corners by fitting the four edges
+and solving the exact four-point homography is more robust on low-texture
+artwork than descriptor matching, and fully deterministic.
+
+### Decision rule going forward
+
+Keep the detection package to numpy + Pillow. Adding a dependency that
+reintroduces a container build must be justified against a measured
+capability gain, because the container path costs Docker in CI, a registry, and
+cold-start weight.
+
+### If a future feature genuinely needs heavier CV
+
+Then App Runner with a FastAPI service, per the original fallback — not a
+Lambda container, since at that point the size pressure is real rather than
+incidental.
 
 ## 6. Reference enrollment
 

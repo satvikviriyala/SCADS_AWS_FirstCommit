@@ -184,24 +184,37 @@ Metrics:
 
 ## 9. Deployment workflow
 
-Example SAM path:
+**Implemented with boto3, not the AWS CLI or the SAM CLI.** CloudFormation
+applies the `AWS::Serverless-2016-10-31` transform server-side, so a SAM
+template deploys through `create_change_set` with `CAPABILITY_AUTO_EXPAND`. The
+CLIs are a convenience; this project's environment has neither, and the SDK is
+sufficient.
 
 ```bash
-sam validate
-sam build
-sam deploy --guided   # first time
-sam deploy            # later
+# Backend: build, upload, change set, seed, smoke test
+python scripts/deploy.py --region ap-south-1
+python scripts/deploy.py --plan            # review changes without applying
+
+# Frontend: Amplify manual deployment (no Git connection, no build step)
+python scripts/deploy_web.py --region ap-south-1 --api-url https://...
 ```
 
-Frontend:
+The Lambda package is built by `scripts/package_lambda.py`, which downloads
+manylinux x86_64 wheels for Python 3.12 with pip. No Docker, no emulation. It
+verifies the result carries Linux shared objects rather than the build host's,
+checks the unzipped size against the Lambda limit, and statically scans for
+imports of packages deliberately excluded from the deployment.
+
+There is no frontend build step: the client is plain HTML, CSS and ES modules.
+
+Verification after every deploy:
+
 ```bash
-npm ci
-npm test
-npm run build
-# connected Amplify deployment
+python scripts/smoke_test.py --base-url <api> --expect-aws
 ```
 
-Exact commands must be updated in `MEMORY.md`.
+`--expect-aws` fails unless the live API reports `s3` / `dynamodb` / `textract`,
+so a deployment quietly running on offline stubs cannot pass.
 
 ## 10. Smoke test
 

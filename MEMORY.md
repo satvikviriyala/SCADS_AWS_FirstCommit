@@ -13,14 +13,19 @@
 
 ## Current phase
 
-`PHASE_3_PHYSICAL` complete. Next: `PHASE_1_VERTICAL_SLICE` (API + web + AWS), then `PHASE_4`
-fusion wiring into the orchestrator.
+**P0 complete except the two steps that require AWS credentials.** Phases 0, 2, 3, 4,
+5 and 6 are done; Phase 1 (deployed slice) and Phase 7 (submission) are blocked only on
+credentials and a recording.
 
-Note the phase order deviation: P0-P2-P3 (pure detection core) were built before P1
-(deployment), because this workstation has no AWS CLI, no SAM CLI and no Docker
-(see "Environment reality" below). Building the testable core first was the only
-way to make progress; the deployment path is written to be runnable the moment
-credentials exist.
+Phase order deviation, deliberate: the detection core (P0/P2/P3/P4) was built before
+deployment (P1) because this workstation has no AWS CLI, no SAM CLI, no Docker and no
+credentials. Building the testable core first was the only way to make progress. The
+deployment path is complete and runnable the moment credentials exist:
+
+```bash
+python scripts/deploy.py --region ap-south-1          # stack + seed + smoke
+python scripts/deploy_web.py --api-url https://...    # Amplify
+```
 
 ## Current implementation status
 
@@ -44,8 +49,14 @@ Implemented and tested (234 tests, all passing, `.venv/bin/python -m pytest test
   21-fixture corpus, measurement-based reference enrollment.
 - `scripts/calibrate.py` — the measurement harness behind every threshold.
 
-Not yet implemented: the API handlers/orchestrator, the web frontend, the SAM template,
-the deploy/seed/smoke scripts.
+- `packages/scads/scads/api/` — routing, validation, the scan orchestrator.
+- `apps/web/` — zero-build mobile PWA; `apps/api/handler.py` — Lambda entry.
+- `infra/template.yaml` — SAM template.
+- `scripts/` — `seed_demo`, `calibrate`, `dev_server`, `package_lambda`, `deploy`,
+  `deploy_web`, `smoke_test`, `secret_scan`.
+
+**Not done:** the actual AWS deployment (no credentials), the demo recording, and the
+submission. WAF and a latency dashboard remain P1.
 
 ## Environment reality (important for any agent resuming this work)
 
@@ -111,15 +122,17 @@ why the fusion policy acts on codes through caps and ceilings.
 13. Raw scan events are append-only logically; corrections create new events/findings rather than rewriting history.
 14. The architecture should be EPCIS-friendly long term without requiring EPCIS implementation for the hackathon.
 
-## Tentative choices that agents may change with evidence
+## Previously tentative choices, now settled
 
-- React/Vite vs Next.js frontend.
-- SAM vs CDK.
-- Lambda container vs App Runner for OpenCV.
-- Exact Textract API.
-- Exact numeric thresholds in demo scoring.
-- Whether location is entered through a demo scenario selector instead of browser geolocation.
-- Bedrock model selection.
+| Question | Settled as | Why |
+|---|---|---|
+| React/Vite vs Next.js | Neither — plain HTML/CSS/ES modules | No Node toolchain here; Amplify serves static assets with no build |
+| SAM vs CDK | SAM template, deployed via boto3 | CloudFormation applies the transform server-side; no CLI needed |
+| Lambda container vs App Runner for OpenCV | Neither — OpenCV removed | 223 MB vs 79 MB; Docker unavailable. See ARCHITECTURE section 5 |
+| Exact Textract API | `detect_document_text` | Needs word geometry, not forms; cheaper and lower latency |
+| Numeric thresholds | Set from `scripts/calibrate.py` | Measured over the fixture corpus, not chosen by feel |
+| Location input | Named simulated locations in a selector | Never requests real location; every surface labels it simulated |
+| Bedrock model | Claude 3.5 Haiku, disabled by default | Explanation only; cheapest adequate model; never authoritative |
 
 Any change to a locked decision requires:
 1. evidence;
@@ -151,6 +164,15 @@ This scenario is strategically important because it demonstrates why SCADS is no
 | 2026-09-18 | Core verdict deterministic; Bedrock optional/explanatory | Repeatability, auditability, easier judging | Architecture/scoring docs |
 | 2026-09-18 | Add scan-history anomaly to hackathon MVP | Distinguishes SCADS from database lookup systems | Demo scenario C |
 | 2026-09-18 | Poor scan => unverifiable, not counterfeit | Prevent false accusation caused by camera conditions | Detection policy |
+| 2026-09-18 | Drop OpenCV; numpy + Pillow only | 223 MB vs 79 MB unzipped against a 250 MB Lambda limit; Docker unavailable for the documented container fallback | `docs/ARCHITECTURE.md` section 5; `scripts/package_lambda.py` |
+| 2026-09-18 | Registration by quad detection + four-point DLT homography, not ORB | A carton is a planar rectangle; stronger prior than generic keypoints, deterministic, numpy-only | `packages/scads/scads/physical/registration.py` |
+| 2026-09-18 | Zero-build static frontend | No Node toolchain; removes the entire bundler failure mode from the demo path | `apps/web/` |
+| 2026-09-18 | Deploy via boto3 + CloudFormation change sets | No AWS CLI or SAM CLI available; CloudFormation runs the SAM transform server-side | `scripts/deploy.py` |
+| 2026-09-18 | General contradiction ceiling added to the fusion policy | Geometric fusion alone still cleared 0.75 with one dimension failing and two near-perfect | `tests/unit/test_fusion.py` |
+| 2026-09-18 | Severe-physical cap and region-consistency finding conditioned on registration confidence | Both fired on a genuine pack photographed off-axis; camera geometry must not manufacture accusations | `packages/scads/scads/physical/pipeline.py` |
+| 2026-09-18 | `print_sharpness` refuses to report on a soft capture | Defocus and poor printing are confounded in one image; a genuine pack scored 0.28 and was reported as a print mismatch | `packages/scads/scads/physical/features.py` |
+| 2026-09-18 | Reference anchors measured from rendered artwork, not hand-written | Guessed coordinates held `text_layout` at 0.69 for every fixture; the guess error exceeded the signal | `packages/scads/scads/demo/enroll.py` |
+| 2026-09-18 | Demo traffic self-tags so the reset can clear it | Five-run rehearsal drifted: accumulated scans correctly produced SERIAL_REUSE against the clean pack | `tests/integration/test_scan_flow.py` |
 
 ## Known risks
 
@@ -160,26 +182,38 @@ This scenario is strategically important because it demonstrates why SCADS is no
 - Location-based anomaly detection must avoid invasive collection; use coarse or synthetic locations in the hackathon.
 - OCR latency can affect synchronous UX.
 - OpenCV/scikit-image Lambda package size may push toward a container image.
-- A single serial reused many times can be legitimate during testing; environment/demo fixtures need namespaces or reset scripts.
+- A single serial reused many times can be legitimate during testing. **Resolved:** demo
+  traffic carries a `demo_tag` and `/v1/admin/demo/reset` clears only tagged events;
+  untagged real observations are never touched.
+- **Unverified against real AWS:** the Textract response shape (the adapter follows the
+  documented API but has never been called), browser-to-S3 presigned PUT under the
+  configured CORS rules, and Lambda cold-start latency with a 78 MB package. These are
+  the first things to check after deploying.
+- `tamper_reprint` is a documented confound, not a capability: a uniformly soft reprint
+  trips the quality gate and returns UNABLE_TO_VERIFY. SCADS does not claim to detect
+  that case. `tamper_resample` covers print degradation a sharp capture can establish.
 
 ## Environment checklist
 
-Update as implementation lands:
-
-- AWS region: TBD
-- Amplify URL: TBD
-- API base URL: TBD
-- S3 upload bucket: TBD
-- DynamoDB tables: TBD
-- Textract enabled: TBD
-- Bedrock model/region: TBD
-- Deployment command: TBD
-- Smoke-test command: TBD
-- Demo seed command: TBD
+- AWS region: `ap-south-1` (default; override with `AWS_REGION`)
+- Amplify URL: **not yet deployed** — no credentials in this environment
+- API base URL: **not yet deployed**
+- S3 buckets: `scads-scans-{env}-{account}`, `scads-references-{env}-{account}`
+- DynamoDB tables: `scads-registry-{env}`, `scads-scan-events-{env}`, `scads-references-{env}`
+- Textract: `detect_document_text`, same region
+- Bedrock: Claude 3.5 Haiku, off by default (`--bedrock` to enable)
+- Deployment: `python scripts/deploy.py --region ap-south-1`
+- Web deployment: `python scripts/deploy_web.py --api-url <ApiUrl>`
+- Smoke test: `python scripts/smoke_test.py --base-url <api> --expect-aws`
+- Demo seed: `python scripts/seed_demo.py` (add `--aws` for a deployed stack)
+- Local dev: `python scripts/dev_server.py`
 
 ## Last verified test state
 
-`234 passed` via `.venv/bin/python -m pytest tests/ -q`. No known failures.
+`313 passed` via `.venv/bin/python -m pytest tests/ -q`. No known failures.
+
+Five consecutive demo rehearsals against a running server: 20/20 checks passed,
+p50 370 ms. `scripts/secret_scan.py` clean. Lambda package builds at 78 MB unzipped.
 
 ## Commands that work
 
@@ -196,7 +230,20 @@ python3 -m venv .venv
 
 ## Next exact task
 
-Build the API layer: `scads/api/` (router, request validation, orchestrator wiring
-quality -> identity -> physical -> history -> fusion), `apps/api/handler.py` as the
-Lambda entry point, then `scripts/dev_server.py` so the whole path runs locally on the
-offline backends. After that the SAM template and `scripts/deploy.py`.
+Deploy. Everything else is done and verified locally.
+
+```bash
+export AWS_REGION=ap-south-1
+.venv/bin/python scripts/deploy.py --plan     # review the change set first
+.venv/bin/python scripts/deploy.py            # apply, seed, smoke test
+.venv/bin/python scripts/deploy_web.py --api-url <ApiUrl from the output>
+```
+
+Then: open the Amplify URL in a private window, run the three demo packs, restrict
+CORS to that origin (`scripts/deploy.py --allowed-origins <url>`), tag the commit, and
+record the video against `docs/DEMO_AND_SUBMISSION.md` section 2.
+
+Unverified until then: the real Textract response shape against the pack fixtures
+(the adapter is written to the documented API but has never been called), S3 presigned
+PUT from a browser with the CORS rules as configured, and Lambda cold-start latency
+with a 78 MB package.
